@@ -1,0 +1,11 @@
+# Source data files (not needed for the published dashboard)
+*.xlsx
+*.xls
+~$*
+staff_data.db
+dashboard_data2.json
+
+# Python
+__pycache__/
+*.py[cod]
+.DS_Store
