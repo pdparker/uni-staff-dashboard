@@ -111,6 +111,7 @@
     @media(max-width:600px) { .kpi-row{grid-template-columns:1fr 1fr;} .header{flex-direction:column;align-items:flex-start;} }
     @media print { body{background:white;} .filter-bar,.ms-panel{display:none;} .card,.kpi{break-inside:avoid;box-shadow:none;} }
   </style>
+<script src="https://pdparker.github.io/dashboard-commons/commons.js" data-dash="staff"></script>
 </head>
 <body>
 <div class="dash">
@@ -157,6 +158,7 @@
         <button class="mbtn active" id="mbtn-fte"   onclick="D.setMetric('fte',this)">FTE</button>
         <button class="mbtn"        id="mbtn-count" onclick="D.setMetric('count',this)">Headcount</button>
       </div>
+      <button class="ms-ctrl" onclick="D.exportCsv()">&#8681; Export CSV</button>
     </div>
   </header>
 
@@ -346,8 +348,54 @@ class Dashboard {
         document.getElementById('ms-panel').classList.remove('open');
     });
 
-    this.rebuildOpts();
-    this.renderAll();
+    this.initFromUrl();
+  }
+
+  // dashboard-commons: resolve ?state= / ?view= (sync) and ?inst= (async, via registry)
+  initFromUrl() {
+    const STATE_VALUES = ['Australian Capital Territory','Multi-State','New South Wales',
+      'Northern Territory','Queensland','South Australia','Tasmania','Victoria','Western Australia'];
+
+    if (typeof DashCommons === 'undefined') { this.rebuildOpts(); this.renderAll(); return; }
+
+    const st = DashCommons.state.get('state', 'all');
+    if (st === 'all' || STATE_VALUES.includes(st)) {
+      document.getElementById('f-state').value = st;
+      this.statePool = st === 'all' ? [...ALL_INSTS] : ALL_INSTS.filter(i => INST_YEAR[i]?.state === st);
+    }
+
+    const view = DashCommons.state.get('view', 'fte');
+    if (view === 'fte' || view === 'count') {
+      this.metric = view;
+      document.querySelectorAll('.mbtn').forEach(b => b.classList.remove('active'));
+      document.getElementById(view === 'fte' ? 'mbtn-fte' : 'mbtn-count').classList.add('active');
+    }
+
+    const instParam = DashCommons.state.get('inst', '');
+    if (!instParam) { this.rebuildOpts(); this.renderAll(); return; }
+
+    DashCommons.registry().then(reg => {
+      instParam.split(',').forEach(id => {
+        const inst = reg.byId[id.trim()];
+        if (inst && ALL_INSTS.includes(inst.name)) this.selected.add(inst.name);
+      });
+      this.updateLabel();
+      this.rebuildOpts();
+      this.renderAll();
+    }).catch(() => { this.rebuildOpts(); this.renderAll(); });
+  }
+
+  // dashboard-commons: push current filter state to the URL
+  syncUrl() {
+    if (typeof DashCommons === 'undefined') return;
+    const stateVal = document.getElementById('f-state').value;
+    DashCommons.state.set('state', stateVal === 'all' ? null : stateVal);
+    DashCommons.state.set('view', this.metric === 'fte' ? null : this.metric);
+    if (!this.selected.size) { DashCommons.state.set('inst', null); return; }
+    DashCommons.registry().then(reg => {
+      const ids = [...this.selected].map(n => { const m = reg.lookup(n); return m ? m.id : null; }).filter(Boolean);
+      DashCommons.state.set('inst', ids.length ? ids.join(',') : null);
+    }).catch(() => {});
   }
 
   get filtered() {
@@ -378,8 +426,8 @@ class Dashboard {
   }
 
   msSearch(q)  { this.rebuildOpts(q); }
-  toggle(n, v) { v ? this.selected.add(n) : this.selected.delete(n); this.updateLabel(); this.refresh(); }
-  msAll()      { this.selected.clear(); this.rebuildOpts(document.getElementById('ms-q').value); this.updateLabel(); this.refresh(); }
+  toggle(n, v) { v ? this.selected.add(n) : this.selected.delete(n); this.updateLabel(); this.refresh(); this.syncUrl(); }
+  msAll()      { this.selected.clear(); this.rebuildOpts(document.getElementById('ms-q').value); this.updateLabel(); this.refresh(); this.syncUrl(); }
   msClear()    { this.msAll(); }
 
   updateLabel() {
@@ -398,6 +446,7 @@ class Dashboard {
     this.rebuildOpts();
     this.updateLabel();
     this.refresh();
+    this.syncUrl();
   }
 
   setMetric(m, btn) {
@@ -405,6 +454,7 @@ class Dashboard {
     document.querySelectorAll('.mbtn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     this.refresh();
+    this.syncUrl();
   }
 
   // ── Refresh ─────────────────────────────────────────────
@@ -865,6 +915,40 @@ class Dashboard {
         <td class="${g >= 0 ? 'pos' : 'neg'}">${sign}${g.toFixed(1)}%</td>
       </tr>`;
     }).join('');
+  }
+
+  // ---- CSV EXPORT (institution detail table, respects state/institution/view filters) ----
+  exportCsv() {
+    const rows = [['state','institution','2025_fte','2025_headcount','2024_fte','2024_headcount','5yr_headcount_growth_pct']];
+    [...this.filtered].forEach(inst => {
+      const d = INST_YEAR[inst]?.years;
+      const c21 = d?.['2021']?.count || 0, c25 = d?.['2025']?.count || 0;
+      const g = c21 ? +((c25 - c21) / c21 * 100).toFixed(1) : '';
+      rows.push([
+        INST_YEAR[inst]?.state || '',
+        inst,
+        d?.['2025']?.fte ?? '',
+        d?.['2025']?.count ?? '',
+        d?.['2024']?.fte ?? '',
+        d?.['2024']?.count ?? '',
+        g
+      ]);
+    });
+
+    const csv = rows.map(r => r.map(v => {
+      const s = String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',')).join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'staff-numbers-' + this.metric + (this.selected.size ? '-filtered' : '-all') + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 }
 
