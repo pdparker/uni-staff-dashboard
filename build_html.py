@@ -99,6 +99,8 @@ TEMPLATE = r"""<!DOCTYPE html>
     .kchg { display:inline-block; font-size:0.71rem; font-weight:600; margin-top:8px; padding:3px 8px; border-radius:100px; }
     .kchg.up   { background:rgba(0,90,182,0.10); color:var(--tertiary); }
     .kchg.down { background:rgba(188,0,2,0.10);  color:var(--primary);  }
+    .kchg.neutral { background:var(--surface-mid); color:var(--on-surface-variant); cursor:help; }
+    .kpi.hero .kchg.neutral { background:rgba(255,255,255,0.14); color:rgba(255,255,255,0.85) !important; }
 
     /* ── Cards / bento ── */
     .bento-main { display:grid; grid-template-columns:3fr 2fr; gap:12px; }
@@ -234,7 +236,7 @@ TEMPLATE = r"""<!DOCTYPE html>
           <div class="card-sub"   id="s-trend">Staff FTE by year</div>
         </div>
       </div>
-      <div class="note">&#9888; 2025 FTE excludes casual staff &#8212; prior years include actual casual FTE, affecting year-on-year comparisons.</div>
+      <div class="note">&#9888; 2025 FTE excludes casual staff &#8212; prior years include actual casual FTE. The dashed segment and 2025 point below mark this basis change; it is not a like-for-like year-on-year comparison, and the "vs 2024" figures on the FTE and ratio KPIs above are suppressed for the same reason. Headcount is unaffected.</div>
       <div class="cw"><canvas id="ch-trend"></canvas></div>
     </div>
     <div class="card">
@@ -329,6 +331,11 @@ TEMPLATE = r"""<!DOCTYPE html>
 
 // ── Constants ────────────────────────────────────────────
 const YEARS     = [2021,2022,2023,2024,2025];
+// The official collection changed basis in 2025: FTE excludes casual staff from this year
+// on, while 2021-2024 FTE includes actual casual FTE. Headcount is FT&FF in every year, so
+// it isn't affected — only FTE (and anything derived from it, like the FTE/headcount ratio)
+// needs the "not a comparable YoY figure" treatment.
+const FTE_BASIS_BREAK_YEAR = 2025;
 const ALL_INSTS = Object.keys(INST_YEAR).sort();
 const STATE_ABBR = {
   'Australian Capital Territory':'ACT','Multi-State':'Multi','New South Wales':'NSW',
@@ -506,9 +513,15 @@ class Dashboard {
     return Math.round(v).toLocaleString('en-AU');
   }
 
-  setChg(id, val, prev) {
+  setChg(id, val, prev, comparable = true) {
     const el = document.getElementById(id);
     if (!el) return;
+    if (!comparable) {
+      el.textContent = 'basis changed vs 2024 — see note';
+      el.className = 'kchg neutral';
+      el.title = `${FTE_BASIS_BREAK_YEAR} FTE excludes casual staff; ${FTE_BASIS_BREAK_YEAR - 1} and earlier include it. Not a like-for-like year-on-year figure.`;
+      return;
+    }
     if (!prev) { el.textContent = ''; return; }
     const p = ((val - prev) / prev * 100).toFixed(1);
     const sign = p >= 0 ? '+' : '';
@@ -532,12 +545,28 @@ class Dashboard {
     document.getElementById('k-inst-s').textContent =
       f.length === ALL_INSTS.length ? 'All HE providers' : `of ${ALL_INSTS.length} total`;
 
-    this.setChg('k-fte-c',   fte25,   fte24);
-    this.setChg('k-cnt-c',   cnt25,   cnt24);
-    this.setChg('k-ratio-c', ratio25, ratio24);
+    this.setChg('k-fte-c',   fte25,   fte24,   false); // FTE basis changed in 2025 (excl. casual) — not comparable
+    this.setChg('k-cnt-c',   cnt25,   cnt24);           // headcount is FT&FF in every year — comparable
+    this.setChg('k-ratio-c', ratio25, ratio24, false);  // ratio inherits FTE's basis change
   }
 
   // ── Trend chart ─────────────────────────────────────────
+  // FTE has a basis break at FTE_BASIS_BREAK_YEAR (excludes casual staff from that year on);
+  // headcount doesn't. When plotting FTE, style the final segment as dashed/muted instead of
+  // a plain continuous line, so the drop reads as "different basis" not "sector collapse".
+  breakSegmentStyle(m, baseColor) {
+    if (m !== 'fte') return {};
+    const breakLabelIdx = YEARS.indexOf(FTE_BASIS_BREAK_YEAR);
+    return {
+      segment: {
+        borderDash: ctx => ctx.p1DataIndex === breakLabelIdx ? [7, 5] : undefined,
+        borderColor: ctx => ctx.p1DataIndex === breakLabelIdx ? '#8a6400' : undefined
+      },
+      pointBackgroundColor: ctx => YEARS[ctx.dataIndex] === FTE_BASIS_BREAK_YEAR ? '#8a6400' : '#fff',
+      pointBorderColor: ctx => YEARS[ctx.dataIndex] === FTE_BASIS_BREAK_YEAR ? '#8a6400' : baseColor
+    };
+  }
+
   buildTrendDatasets() {
     const f = this.filtered, m = this.metric;
     const lbl = m === 'fte' ? 'Staff FTE' : 'Headcount';
@@ -547,21 +576,24 @@ class Dashboard {
       const data = YEARS.map(y => f.reduce((a,i) => a + (INST_YEAR[i]?.years[String(y)]?.[m] || 0), 0));
       return {
         title: 'Trend 2021–2025',
-        sub: `${lbl} by year · ${f.length === ALL_INSTS.length ? 'all institutions' : f.length+' institutions'}`,
+        sub: `${lbl} by year · ${f.length === ALL_INSTS.length ? 'all institutions' : f.length+' institutions'}`
+             + (m === 'fte' ? ' · dashed segment = 2025 basis change, see note below' : ''),
         multiLine: false,
         datasets: [{
           label: 'Total '+lbl, data,
           borderColor: COLORS[0], backgroundColor: COLORS[0]+'18',
           borderWidth: 2.5, fill: true, tension: 0.35,
           pointRadius: 5, pointHoverRadius: 8,
-          pointBackgroundColor: '#fff', pointBorderColor: COLORS[0], pointBorderWidth: 2
+          pointBackgroundColor: '#fff', pointBorderColor: COLORS[0], pointBorderWidth: 2,
+          ...this.breakSegmentStyle(m, COLORS[0])
         }]
       };
     }
 
     return {
       title: 'Institution Trend 2021–2025',
-      sub: `${lbl} by year — ${f.length} institution${f.length !== 1 ? 's' : ''}`,
+      sub: `${lbl} by year — ${f.length} institution${f.length !== 1 ? 's' : ''}`
+           + (m === 'fte' ? ' · dashed segment = 2025 basis change' : ''),
       multiLine: true,
       datasets: f.map((inst, i) => ({
         label: sname(inst),
@@ -570,8 +602,8 @@ class Dashboard {
         backgroundColor: 'transparent',
         borderWidth: 2, fill: false, tension: 0.3,
         pointRadius: 4, pointHoverRadius: 7,
-        pointBackgroundColor: '#fff',
-        pointBorderColor: COLORS[i % COLORS.length], pointBorderWidth: 2
+        pointBackgroundColor: '#fff', pointBorderColor: COLORS[i % COLORS.length], pointBorderWidth: 2,
+        ...this.breakSegmentStyle(m, COLORS[i % COLORS.length])
       }))
     };
   }
@@ -621,10 +653,12 @@ class Dashboard {
     const rows = [...this.filtered]
       .map(i => ({ inst: i, val: INST_YEAR[i]?.years['2025']?.[m] || 0 }))
       .sort((a, b) => b.val - a.val).slice(0, 20);
+    // A single consistent colour, not one-per-bar rainbow — rank position carries no
+    // categorical meaning here. ACU is highlighted in the brand red when it appears.
     return {
       labels: rows.map(r => sname(r.inst)),
       data:   rows.map(r => Math.round(r.val)),
-      colors: rows.map((_, i) => COLORS[i % COLORS.length] + 'cc'),
+      colors: rows.map(r => r.inst === 'Australian Catholic University' ? '#bc0002' : '#794c90cc'),
     };
   }
 

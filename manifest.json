@@ -3,12 +3,12 @@
   "title": "University Staff Numbers",
   "url": "https://pdparker.github.io/uni-staff-dashboard/",
   "repo": "pdparker/uni-staff-dashboard",
-  "lastBuild": "2026-04-26",
+  "lastBuild": "2026-07-19",
   "dataSources": [
     {
       "name": "Dept of Education Higher Education Staff Collection",
       "vintage": "2021-2025"
     }
   ],
-  "notes": "2025 FTE excludes casual staff while prior years include actual casual FTE, so year-on-year FTE comparisons involving 2025 are not on a like-for-like basis."
+  "notes": "2025 FTE excludes casual staff while prior years include actual casual FTE, so year-on-year FTE comparisons involving 2025 are not on a like-for-like basis. As of 2026-07 the dashboard itself makes this visible: the FTE/ratio KPI deltas are suppressed rather than shown as a misleading drop, and the trend line is dashed across the 2025 basis break. Headcount is unaffected and shown normally."
 }
